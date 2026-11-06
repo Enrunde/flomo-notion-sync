@@ -35,6 +35,9 @@ jobs:
 
       - name: 同步 flomo → Notion
         env:
+          # ★★★ 优先用 flomo 官方 MCP 的个人 Token（★ 官方长期方案 · 不怕改版）★★★
+          FLOMO_MCP_TOKEN: ${{ secrets.FLOMO_MCP_TOKEN }}
+          # 备用：官方 API Key
           FLOMO_API_KEY: ${{ secrets.FLOMO_API_KEY }}
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
         run: node flomo-sync.js
