@@ -89,13 +89,18 @@ async function api(p, method, body, token) {
 //  HTML → 纯文本 / markdown
 // ══════════════════════════════════════════════════
 function htmlToText(html) {
+  const SENT = String.fromCharCode(1);          // ★ 哨兵字符（不会出现在正文里）★
   return String(html || "")
+    // ★★★ flomo 的 Markdown 链接是 <https://xxx> 形式 → 不是 HTML 标签，要保留 ★★★
+    //   ★ 先用哨兵把 < 和 > 换掉 → 剥完标签再还原（否则会被 <[^>]+> 一起吃掉）★
+    .replace(/<((?:https?|mailto):[^>]+)>/g, SENT + "$1" + SENT)
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/p>/gi, "\n")
     .replace(/<\/h[1-6]>/gi, "\n")
     .replace(/<li[^>]*>/gi, "\n- ")
     .replace(/<\/li>/gi, "")
     .replace(/<[^>]+>/g, "")
+    .replace(new RegExp(SENT, "g"), "<")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
@@ -103,6 +108,38 @@ function htmlToText(html) {
     .replace(/&quot;/g, '"')
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+/**
+ * ★★★ 把 MCP 返回的 memo 适配成【内部接口的字段格式】★★★ ★
+ *  ★ MCP 与内部接口的差异：★
+ *   · slug        → MCP 用 id
+ *   · content     → MCP 是 Markdown 原文（内部接口是 HTML）
+ *   · created_at  → MCP 是 ISO 带时区（内部接口是 "YYYY-MM-DD HH:mm:ss"）
+ *   · source      → MCP 是 from（human/ai/api/import/paste）
+ *   · pin         → MCP 没有
+ *   · deleted_at  → MCP 搜不到已删除的
+ */
+function adaptMemo(m) {
+  if (!m) return null;
+  const o = Object.assign({}, m);
+  if (!o.slug && o.id) o.slug = String(o.id);
+  // ★ 时间：统一成 "YYYY-MM-DD HH:mm:ss"（北京时间）★★
+  const fmt = (s) => {
+    if (!s) return "";
+    const m2 = /(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(String(s));
+    if (!m2) return String(s);
+    return m2[1] + "-" + m2[2] + "-" + m2[3] + " " + m2[4] + ":" + m2[5] + ":" + m2[6];
+  };
+  if (o.created_at) o.created_at = fmt(o.created_at);
+  if (o.updated_at) o.updated_at = fmt(o.updated_at);
+  // ★ source：MCP 的 from="human" 不在 Notion 的选项里 → 留空（写入时自动跳过）★
+  if (o.from && ["ios", "web", "wechat", "微信"].indexOf(o.from) < 0) o.source = "";
+  if (o.pin === undefined) o.pin = 0;
+  if (!Array.isArray(o.tags)) o.tags = [];
+  if (!Array.isArray(o.files)) o.files = [];
+  if (o.linked_memos && !o.linked_count) o.linked_count = o.linked_memos.length;
+  return o;
 }
 
 /** 抽正文里的 #标签 */
@@ -428,7 +465,7 @@ async function clearChildren(pageId, token) {
 }
 
 module.exports = {
-  api, loadToken, htmlToText, extractTags, makeTitle, makeSummary, toISO,
+  api, loadToken, htmlToText, adaptMemo, extractTags, makeTitle, makeSummary, toISO,
   TagStore, NoteStore, writeMemo, archiveMemo, buildBlocks, clearChildren,
   DS_NOTES, DS_TAGS, FLOMO_PAGE,
 };

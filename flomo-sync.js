@@ -26,6 +26,7 @@
 const fs = require("fs");
 const path = require("path");
 const W = require("./flomo写Notion.js");
+const MCP = require("./flomoMCP.js");
 
 const DRY = process.argv.includes("--干跑");
 const FULL = process.argv.includes("--全量");
@@ -103,9 +104,35 @@ async function main() {
     return;
   }
 
-  // ★★ 自检模式：只验 Notion 权限（★ 没 API Key 时也能确认云端能不能写 ★）★★
-  if (!key) {
-    console.log("  ⚠ 没有 FLOMO_API_KEY（GitHub secret）");
+  // ── ① 取数（★ 优先 flomo 官方 MCP —— 官方长期方案）──
+  const mcpToken = String(process.env.FLOMO_MCP_TOKEN || "").trim();
+  let memos = null;
+
+  if (mcpToken) {
+    try {
+      const cli = new MCP.FlomoMCP(mcpToken);
+      await cli.init();
+      memos = await cli.readMemos({ limit: 50 });
+      console.log("  取数方式：flomo 官方 MCP（个人 Token）");
+    } catch (e) {
+      console.log("  ⚠ MCP 取数失败：" + String(e.message).slice(0, 150));
+      console.log("    → 检查 Token 是否完整、是否被注销");
+    }
+  }
+
+  if (!memos && key) {
+    try {
+      memos = await pullOfficial(key);
+      console.log("  取数方式：官方 API Key");
+    } catch (e) {
+      console.log("  ⚠ 官方 API 读取失败：" + e.message);
+    }
+  }
+
+  if (!memos) {
+    // ★★ 自检模式：只验 Notion 权限（★ 没凭证时也能确认云端能不能写）★★
+    console.log("  ⚠ 没有 FLOMO_MCP_TOKEN / FLOMO_API_KEY（GitHub secret）");
+    console.log("  → flomo 网页版 → 设置 → MCP / API → MCP → Token 授权模式 → 创建 Token");
     console.log("  → 先只做 Notion 权限自检：");
     try {
       const notes = new W.NoteStore();
@@ -115,7 +142,7 @@ async function main() {
       console.log("");
       console.log("  ✔ Notion 权限 OK ——「Flomo知识库」现有：笔记 " + n + " 条 ｜ 标签 " + t + " 个");
       console.log("");
-      console.log("  ★ 结论：云端能读写你的库 ✔ 只差 flomo API Key");
+      console.log("  ★ 结论：云端能读写你的库 ✔ 只差 flomo Token");
     } catch (e) {
       console.log("");
       console.log("  ✘ Notion 权限不足：" + String(e.message).slice(0, 160));
@@ -125,16 +152,7 @@ async function main() {
     return;
   }
 
-  // ── ① 取数 ──
-  let memos;
-  try {
-    memos = await pullOfficial(key);
-  } catch (e) {
-    console.log("  ✘ 官方 API 读取失败：" + e.message);
-    process.exitCode = 1;
-    return;
-  }
-  console.log("  官方 API 拉到 " + memos.length + " 条 memo");
+  console.log("  拉到 " + memos.length + " 条 memo");
   if (!memos.length) {
     console.log("  · 没有内容");
     return;
