@@ -96,15 +96,31 @@ async function main() {
   console.log("═══ flomo → Notion「Flomo知识库」云端同步 ═══\n");
 
   const key = apiKey();
-  if (!key) {
-    console.log("  ✘ 没有 FLOMO_API_KEY（GitHub secret）");
-    console.log("    → flomo 网页版 → 设置 → API → 生成 API Key");
-    process.exitCode = 1;
-    return;
-  }
   const notionToken = process.env.NOTION_TOKEN || "";
   if (!notionToken) {
     console.log("  ✘ 没有 NOTION_TOKEN（GitHub secret）");
+    process.exitCode = 1;
+    return;
+  }
+
+  // ★★ 自检模式：只验 Notion 权限（★ 没 API Key 时也能确认云端能不能写 ★）★★
+  if (!key) {
+    console.log("  ⚠ 没有 FLOMO_API_KEY（GitHub secret）");
+    console.log("  → 先只做 Notion 权限自检：");
+    try {
+      const notes = new W.NoteStore();
+      const tags = new W.TagStore();
+      const n = await notes.load(notionToken);
+      const t = await tags.load(notionToken);
+      console.log("");
+      console.log("  ✔ Notion 权限 OK ——「Flomo知识库」现有：笔记 " + n + " 条 ｜ 标签 " + t + " 个");
+      console.log("");
+      console.log("  ★ 结论：云端能读写你的库 ✔ 只差 flomo API Key");
+    } catch (e) {
+      console.log("");
+      console.log("  ✘ Notion 权限不足：" + String(e.message).slice(0, 160));
+      console.log("    → 确认 secret NOTION_TOKEN 对应的 integration 已分享「Flomo知识库」");
+    }
     process.exitCode = 1;
     return;
   }
