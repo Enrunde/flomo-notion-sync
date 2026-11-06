@@ -1,0 +1,69 @@
+name: flomo 速记 → Notion
+
+# ★★★★ 定时自动同步 flomo 到 Notion「Flomo知识库」★★★★ ★
+#  ★ 为什么需要这个：flomo 官方没有「主动推送」服务 → 必须有个拉取器在跑 ★
+#  ★ 这里放在 GitHub Actions 云端 → ★ 电脑关机也能同步 ★
+#
+#  ★ cron 用 UTC：北京时间 = UTC + 8 ★
+#    北京时间 08:30 → UTC 00:30
+#    北京时间 20:30 → UTC 12:30
+#  ★ 每天两次足够（速记不用实时）★
+
+on:
+  schedule:
+    - cron: "30 0 * * *"    # 北京时间 08:30
+    - cron: "30 12 * * *"   # 北京时间 20:30
+  # 也能在网页上手动点一下跑
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v5
+
+      - name: 设定 Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - name: 同步 flomo → Notion
+        env:
+          FLOMO_API_KEY: ${{ secrets.FLOMO_API_KEY }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+        run: node flomo-sync.js
+
+      - name: 提交同步游标
+        # 游标记住「哪条同步过了」→ 下次只处理新增/修改的
+        # （失败不影响主流程，忽略即可）
+        continue-on-error: true
+        run: |
+          if git diff --quiet -- flomo-sync.cursor.json; then
+            echo "游标无变化，无需提交"
+          else
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add flomo-sync.cursor.json
+            git commit -m "chore: 更新 flomo 同步游标 $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            git push
+          fi
+
+      - name: 失败时开 issue
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = 'flomo → Notion 同步失败'
+            const body = `自动同步失败，请检查：
+            - secret FLOMO_API_KEY 是否有效
+            - secret NOTION_TOKEN 对应的 integration 是否已分享「Flomo知识库」
+            - 手动运行：node flomo-sync.js --干跑
+            时间：${new Date().toISOString()}`
+            const { owner, repo } = context.repo
+            await github.rest.issues.create({ owner, repo, title, body })
