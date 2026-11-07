@@ -89,18 +89,21 @@ async function api(p, method, body, token) {
 //  HTML → 纯文本 / markdown
 // ══════════════════════════════════════════════════
 function htmlToText(html) {
-  const SENT = String.fromCharCode(1);          // ★ 哨兵字符（不会出现在正文里）★
+  const SL = String.fromCharCode(1);          // ★ 哨兵：左尖括号（不会出现在正文里）★
+  const SR = String.fromCharCode(2);          // ★ 哨兵：右尖括号 ★
   return String(html || "")
     // ★★★ flomo 的 Markdown 链接是 <https://xxx> 形式 → 不是 HTML 标签，要保留 ★★★
-    //   ★ 先用哨兵把 < 和 > 换掉 → 剥完标签再还原（否则会被 <[^>]+> 一起吃掉）★
-    .replace(/<((?:https?|mailto):[^>]+)>/g, SENT + "$1" + SENT)
+    //   ★ 先用两个哨兵把 < 和 > 换掉 → 剥完标签再还原（否则会被 <[^>]+> 一起吃掉）★
+    //   ★★★ 注意：左右必须用【不同】哨兵 → 同一个会导致还原时 ">" 变成 "<" ★★★
+    .replace(/<((?:https?|mailto):[^>]+)>/g, SL + "$1" + SR)
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/p>/gi, "\n")
     .replace(/<\/h[1-6]>/gi, "\n")
     .replace(/<li[^>]*>/gi, "\n- ")
     .replace(/<\/li>/gi, "")
     .replace(/<[^>]+>/g, "")
-    .replace(new RegExp(SENT, "g"), "<")
+    .replace(new RegExp(SL, "g"), "<")
+    .replace(new RegExp(SR, "g"), ">")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
@@ -204,9 +207,8 @@ function makeTitle(text, fallback, memo) {
       .replace(/(^|\s)#[^\s#，。！？、；：,.;!?:"'()（）【】\[\]]+/g, "$1")
       .trim();
     if (t) {
-      return t.length > 120 ? t.slice(0, 120) + "…" : t;
-    }
-  }
+      return shortenTitle(t);
+    }  }
   // ★ 正文空但有附件（录音/图片）→ 用附件名 ★
   const files = (memo && memo.files) || [];
   if (files.length) {
@@ -216,6 +218,88 @@ function makeTitle(text, fallback, memo) {
     return (kind + (nm ? " " + nm.slice(0, 60) : "")).slice(0, 120);
   }
   return fallback || "未命名";
+}
+
+/**
+ * ★★★ 2026-11-07：★ 标题自动缩短 ★★★ ★
+ *
+ *  ★ 问题：原来直接截前 120 字 → 标题是一大段被硬切的话 → 很难看 ★
+ *  ★ 现在：★ 在【语义边界】断开 ★ → 读起来是完整的一句 ★
+ *
+ *  ★ 断开优先级（从前往后找第一个合适的切点）：
+ *   ① 句号 / 问号 / 感叹号 / 分号
+ *   ② 逗号 / 顿号 / 冒号
+ *   ③ 空格（英文词之间）
+ *  ★ 长度上限 40 字（★ 比原来的 120 短很多 ★，列表里一眼能看完 ★）
+ */
+const TITLE_MAX = 40;
+
+function shortenTitle(t) {
+  const s = String(t || "").trim();
+  if (!s) return trimTitleTail(s);
+  if (s.length <= TITLE_MAX) return trimTitleTail(s);
+
+  // ★★★ 0. URL 处理：★ 标题里不该有被切一半的链接 ★★★ ★
+  //   ★ 把完整 URL 摘出来 → 标题里只留链接前的中文说明 ★
+  //   ★ URL 本身太长 → 直接整个去掉（正文里有）★
+  let body = s;
+  // ★ flomo 的链接常写成 <https://...>（尖括号自动链接）→ 一起认 ★
+  const urlRe = /<?https?:\/\/[^\s>]+>?/g;
+  const urls = body.match(urlRe) || [];
+  let urlNote = "";
+  if (urls.length) {
+    // ★ 去掉链接后剩下的文字 ★
+    body = body.replace(urlRe, " ").replace(/\s+/g, " ").trim();
+    // ★ 剩余文字够长就用它；太短就退化成「前缀 + 链接标识」★
+    if (body.length >= 6) {
+      urlNote = "";
+    } else {
+      // ★ 只剩几个字 → 标题用「前缀 + 🔗」★
+      const prefix = body.replace(/[（(【\[]?\s*$/, "").trim();
+      return trimTitleTail((prefix ? prefix.slice(0, TITLE_MAX - 4) : "笔记") + " 🔗");
+    }
+  }
+
+  if (body.length <= TITLE_MAX) return trimTitleTail(body + urlNote);
+
+  // ① 句末标点
+  const m1 = body.slice(0, TITLE_MAX + 12).match(/^[\s\S]{4,}?[。！？!?；;]/);
+  if (m1) return trimTitleTail(m1[0].trim());
+
+  // ② 逗号 / 顿号 / 冒号（★ 在 TITLE_MAX 内找【最靠后】的 ★）
+  const cand = [];
+  const re = /[，,、：:]/g;
+  let mm;
+  while ((mm = re.exec(body)) !== null) {
+    if (mm.index < 8) continue;              // 太靠前 → 标题太空
+    if (mm.index > TITLE_MAX) break;         // 太靠后 → 标题还是长
+    cand.push(mm.index);
+  }
+  if (cand.length) {
+    // ★ 取【最靠前】的一个 ★
+    //   ★ 为什么最靠前：★ 标题应该是「一件事的概括」★
+    //     「购买谷歌手机，使用英文版…」比「购买谷歌手机，使用英文版注册谷歌账户，另外…」更像标题 ★
+    const cut = cand[0];
+    const t = body.slice(0, cut).trim();
+    if (t.length >= 8) return trimTitleTail(t);
+  }
+
+  // ③ 空格（英文句子）
+  const sp = body.slice(0, TITLE_MAX).lastIndexOf(" ");
+  if (sp >= 12) return trimTitleTail(body.slice(0, sp).trim());
+
+  // ④ 兜底：硬切
+  return trimTitleTail(body.slice(0, TITLE_MAX).trim() + "…");
+}
+
+/** ★ 去掉标题尾部的孤立标点（★ 「（」「，」这类残留 ★）*/
+function trimTitleTail(s) {
+  let t = String(s || "").trim();
+  // ★ 空括号（URL 被摘掉后留下的）→ 一起去掉 ★
+  t = t.replace(/[（(【\[｛{]\s*[）)】\]｝}]/g, "");
+  t = t.replace(/[（(【\[｛{]\s*$/u, "");
+  t = t.replace(/[，,、：:；;。．.\s]+$/u, "");
+  return t.trim();
 }
 
 /** "2026-11-06 00:20:55"（★ flomo 是北京时间 ★）→ ISO（★ 按北京时间存，Notion 里显示的就是你记的那一刻 ★）*/
@@ -296,8 +380,24 @@ class NoteStore {
           .map((x) => x.plain_text).join("").trim();
         const title = (p.properties["标题"] && p.properties["标题"].title || [])
           .map((x) => x.plain_text).join("").trim();
-        if (slug) this.bySlug.set(slug, { id: p.id, url: p.url, title, archived: p.archived });
-        else if (title) this.bySlug.set("#title:" + title, { id: p.id, url: p.url, title, archived: p.archived });
+        // ★★★ 读「状态」属性（★ 归档标记在这里，不在 p.archived ★）★★★
+        //   ★ p.archived 是 Notion 的"在回收站"标记 → 跟"已归档"是两回事 ★
+        //   ★ 2026-11-06：因为只存了 p.archived → 归档后无法识别已归档 → 每次都重复归档 ★
+        const status = (p.properties["状态"] && p.properties["状态"].status)
+          ? (p.properties["状态"].status.name || "")
+          : "";
+        // ★★★ 2026-11-07：★ 存下当前属性值（★ 供三方合并用 ★）★★★
+        //   ★ 不存就没法判断「用户改过」→ 只能单向覆盖 ✘★
+        const vals = {
+          标题: title,
+          Summary: ((p.properties["Summary"] && p.properties["Summary"].rich_text) || [])
+            .map((x) => x.plain_text).join(""),
+          标签: ((p.properties["标签"] && p.properties["标签"].relation) || [])
+            .map((x) => x.id).sort().join(","),
+          状态: status,
+        };
+        if (slug) this.bySlug.set(slug, { id: p.id, url: p.url, title, archived: p.archived, status, vals });
+        else if (title) this.bySlug.set("#title:" + title, { id: p.id, url: p.url, title, archived: p.archived, status, vals });
       }
       cur = q.has_more ? q.next_cursor : null;
     } while (cur);
@@ -412,6 +512,21 @@ async function writeMemo(memo, notes, tags, opts) {
       ...(blocks.length ? { children: blocks } : {}),
     }, token);
     notes.bySlug.set(String(memo.slug || ""), { id: p.id, url: p.url, title });
+    // ★★★ 2026-11-07：★ 新建也要记基线（★ 否则下一轮会误判成「你改过」★★★
+    const BASE = require(path.join(SYNC, "flomo基线.js"));
+    const baseline = opts.baseline || {};
+    const slugKey = String(memo.slug || "").trim();
+    BASE.setEntry(baseline, slugKey, {
+      标题: title,
+      Summary: summary,
+      标签: tagPages.map((t) => t.id).sort().join(","),
+      状态: "",
+      正文: text,
+    }, {
+      标题: title,
+      Summary: summary,
+      标签: tagPages.map((t) => t.id).sort().join(","),
+    });
     return { action: "新建", title, id: p.id, url: p.url };
   }
 
@@ -419,20 +534,91 @@ async function writeMemo(memo, notes, tags, opts) {
   if (dry) {
     return { action: hit.archived ? "更新(已归档)" : "更新", title, detail: "标签 " + memoTags.length + " 个" };
   }
-  const upd = { properties: props };
-  const blocks = buildBlocks(memo, text);
-  if (blocks.length) {
-    // ★ 先清正文再重填（逐个删子块）★
-    await clearChildren(hit.id, token);
-    for (let i = 0; i < blocks.length; i += 80) {
-      await api("/blocks/" + hit.id + "/children", "PATCH", {
-        children: blocks.slice(i, i + 80),
-      }, token);
-      await sleep(300);
+
+  // ★★★ 2026-11-07：★ 三方合并（★ 支持「你在 Notion 上改过」不被覆盖 ★）★★★
+  //   ★ 原来：无条件全量覆盖 → 你改的一律被冲掉 ✘★
+  //   ★ 现在：拿基线对比 → 只有 flomo 改了的字段才写回 Notion ★
+  const BASE = require(path.join(SYNC, "flomo基线.js"));
+  const baseline = opts.baseline || {};
+  const slugKey = String(memo.slug || "").trim();
+  const baseEntry = BASE.getEntry(baseline, slugKey);
+
+  // ★ flomo 侧现在应该是什么值 ★
+  const flomoNow = {
+    标题: title,
+    Summary: summary,
+    标签: tagPages.map((t) => t.id).sort().join(","),
+  };
+  // ★ Notion 侧现在是什么值 ★
+  const notionNow = hit.vals || {};
+
+  const MERGE_FIELDS = ["标题", "Summary", "标签"];
+  const m = BASE.merge3(baseEntry, notionNow, flomoNow, MERGE_FIELDS);
+
+  // ★ 按合并结果重建属性 ★
+  const finalProps = Object.assign({}, props);
+  if (m.kept.length) {
+    // ★ 保留用户改过的字段 → 用 Notion 现值 ★
+    if (m.kept.indexOf("标题") >= 0) {
+      finalProps["标题"] = { title: [{ type: "text", text: { content: String(m.use["标题"] || "") } }] };
+    }
+    if (m.kept.indexOf("Summary") >= 0) {
+      finalProps["Summary"] = { rich_text: [{ type: "text", text: { content: String(m.use["Summary"] || "") } }] };
+    }
+    if (m.kept.indexOf("标签") >= 0) {
+      // ★ 标签是 relation → 用 Notion 现有的 id ★
+      const ids = String(m.use["标签"] || "").split(",").filter(Boolean);
+      if (ids.length) finalProps["标签"] = { relation: ids.map((id) => ({ id })) };
     }
   }
+
+  // ★ 记基线（★ 同步后的 Notion 值 + 这次的 flomo 值 ★）
+  BASE.setEntry(
+    baseline, slugKey,
+    {
+      标题: m.use["标题"],
+      Summary: m.use["Summary"],
+      标签: m.use["标签"],
+      状态: hit.status || "",
+    },
+    flomoNow
+  );
+
+  const detail = [];
+  if (m.kept.length) detail.push("保留你的修改:" + m.kept.join("/"));
+  if (m.conflict.length) detail.push("两边都改(以flomo为准):" + m.conflict.join("/"));
+
+  // ★★ 正文：★ 只有 flomo 内容变了才重填 ★★
+  //   ★ 不变就别动 → 避免覆盖你在 Notion 上排的版 ★
+  const flomoBodyChanged = !BASE.eq(baseEntry.F && baseEntry.F.正文, text);
+  if (flomoBodyChanged && !m.kept.length) {
+    const blocks = buildBlocks(memo, text);
+    if (blocks.length) {
+      // ★ 先清正文再重填（逐个删子块）★
+      await clearChildren(hit.id, token);
+      for (let i = 0; i < blocks.length; i += 80) {
+        await api("/blocks/" + hit.id + "/children", "PATCH", {
+          children: blocks.slice(i, i + 80),
+        }, token);
+        await sleep(300);
+      }
+    }
+  } else if (flomoBodyChanged && m.kept.length) {
+    detail.push("正文有变化但你改过属性→正文未重填");
+  }
+  // ★ 基线里记下正文指纹（★ 下次判断正文变没变 ★）
+  BASE.setEntry(baseline, slugKey, {
+    标题: m.use["标题"],
+    Summary: m.use["Summary"],
+    标签: m.use["标签"],
+    状态: hit.status || "",
+    正文: text,
+  }, flomoNow);
+
+  const upd = { properties: finalProps };
   await api("/pages/" + hit.id, "PATCH", upd, token);
-  return { action: "更新", title, id: hit.id, url: hit.url };
+  return { action: "更新", title: finalProps["标题"].title[0].text.content, id: hit.id, url: hit.url,
+           detail: detail.join("｜") || undefined };
 }
 
 /** 归档（flomo 侧删除 → Notion 状态改「已归档」）*/
@@ -442,6 +628,7 @@ async function archiveMemo(hit, notes, token, dry) {
     properties: { "状态": { status: { name: "已归档" } } },
   }, token);
   hit.archived = true;
+  hit.status = "已归档";        // ★ 记住状态 → 下轮能识别已归档 → 幂等 ★
   return { action: "归档", title: hit.title, id: hit.id };
 }
 
