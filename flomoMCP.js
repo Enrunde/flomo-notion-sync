@@ -140,6 +140,13 @@ class FlomoMCP {
     const all = [];
     const seen = new Set();
 
+    // ★★★ 2026-11-07：★ 支持「只拉某天之后」★★★ ★
+    //   ★ 云端每天跑 2 次 → 每次都扫完整个历史太慢（★ 实测 7 分钟 ★）★
+    //   ★ 有游标 → 只拉游标那天的数据 → ★ 快几十倍 ★
+    //   ★ 注意：仍要往前多扫一段（★ 防止边界漏 ★）
+    const sinceTs = o && o.since ? new Date(o.since).getTime() : 0;
+    const floorTs = sinceTs ? sinceTs - 3 * 24 * 3600 * 1000 : 0;   // ★ 往前留 3 天余量 ★
+
     // ① memo_search：按 30 天一段往前拉
     let end = new Date();
     for (let round = 0; round < 60; round++) {
@@ -160,6 +167,8 @@ class FlomoMCP {
       const times = list.map((m) => parseTime(m.created_at || m.updated_at)).filter(Boolean);
       if (!times.length) break;
       const min = Math.min.apply(null, times);
+      // ★ 已扫到「since 之前」→ 够了（★ 多留了 3 天余量 ★）★
+      if (floorTs && min <= floorTs) break;
       const lastEnd = new Date(min - 24 * 3600 * 1000);
       if (lastEnd.getTime() <= start.getTime()) break;
       end = lastEnd;
