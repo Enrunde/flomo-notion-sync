@@ -326,7 +326,7 @@ async function main() {
   // ★ 云端模式：★ 先从 Notion 读基线（★ 不依赖 git ★）★★
   if (!DRY && process.env.FLOMO_BASELINE_IN_NOTION === "1") {
     try {
-      const fromNotion = await BASE.loadBaselineFromNotion(N.api, N.DS_NOTES, W.loadToken());
+      const fromNotion = await BASE.loadBaselineFromNotion(W.api, W.DS_NOTES, token);
       if (fromNotion && Object.keys(fromNotion).length) {
         baseline = fromNotion;
         console.log("  ✔ 基线从 Notion 读回（" + Object.keys(baseline).length + " 条）");
@@ -428,7 +428,7 @@ async function main() {
     //   ★ → 存 Notion → 不依赖 git → 跨机器天然一致 ★
     if (process.env.FLOMO_BASELINE_IN_NOTION === "1") {
       try {
-        await BASE.saveBaselineToNotion(baseline, N.api, N.DS_NOTES, token);
+        await BASE.saveBaselineToNotion(baseline, W.api, W.DS_NOTES, token);
         console.log("  ✔ 基线已存进 Notion（" + Object.keys(baseline).length + " 条）");
       } catch (e) {
         console.log("  ⚠ 基线存 Notion 失败：" + String(e.message).slice(0, 90));
