@@ -320,8 +320,23 @@ async function main() {
   const synced = new Set(Array.isArray(cursor.synced) ? cursor.synced : []);
   // ★★★ 2026-11-07：★ 三方合并基线（★ 支撑「Notion 端改动不被覆盖」★★★
   const BASE = require(path.join(__dirname, "flomo基线.js"));
-  const baseline = BASE.readBaseline();
+  let baseline = BASE.readBaseline();
   let nKept = 0, nConflict = 0;
+
+  // ★ 云端模式：★ 先从 Notion 读基线（★ 不依赖 git ★）★★
+  if (!DRY && process.env.FLOMO_BASELINE_IN_NOTION === "1") {
+    try {
+      const fromNotion = await BASE.loadBaselineFromNotion(N.api, N.DS_NOTES, W.loadToken());
+      if (fromNotion && Object.keys(fromNotion).length) {
+        baseline = fromNotion;
+        console.log("  ✔ 基线从 Notion 读回（" + Object.keys(baseline).length + " 条）");
+      } else {
+        console.log("  ⓘ Notion 里还没有基线 → 首次建立");
+      }
+    } catch (e) {
+      console.log("  ⚠ 从 Notion 读基线失败：" + String(e.message).slice(0, 80));
+    }
+  }
 
   for (const memo of list) {
     const slug = String(memo.slug || "").trim();
@@ -407,8 +422,23 @@ async function main() {
 
   // ★★★ 2026-11-07：★ 保存三方合并基线 ★★★
   if (!DRY) {
-    BASE.saveBaseline(baseline);
-    console.log("  ✔ 基线已保存 → " + BASE.BASELINE_FILE + "（" + Object.keys(baseline).length + " 条）");
+    // ★ 云端模式（★ FLOMO_BASELINE_IN_NOTION=1 ★）→ 基线存进 Notion ★
+    //   ★ 原因：★ GitHub 提交 .github/ 下的文件会被拒（404）★
+    //     而且这台机器的 git 端点时好时坏（CONNECT tunnel 502）★
+    //   ★ → 存 Notion → 不依赖 git → 跨机器天然一致 ★
+    if (process.env.FLOMO_BASELINE_IN_NOTION === "1") {
+      try {
+        await BASE.saveBaselineToNotion(baseline, N.api, N.DS_NOTES, token);
+        console.log("  ✔ 基线已存进 Notion（" + Object.keys(baseline).length + " 条）");
+      } catch (e) {
+        console.log("  ⚠ 基线存 Notion 失败：" + String(e.message).slice(0, 90));
+        BASE.saveBaseline(baseline);
+        console.log("  ✔ 已改存本地文件 → " + BASE.BASELINE_FILE);
+      }
+    } else {
+      BASE.saveBaseline(baseline);
+      console.log("  ✔ 基线已保存 → " + BASE.BASELINE_FILE + "（" + Object.keys(baseline).length + " 条）");
+    }
   }
 
   console.log("");
