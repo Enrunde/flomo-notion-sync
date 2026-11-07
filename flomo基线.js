@@ -154,6 +154,12 @@ const BASELINE_PAGE_TITLE = "🔒 flomo同步基线（勿删）";
  */
 async function saveBaselineToNotion(baseline, api, dsId, token) {
   const payload = JSON.stringify(baseline);
+  // ★★★ Notion rich_text 单段上限 2000 字符 → 必须切片 ★★★
+  const CHUNK = 1800;
+  const chunks = [];
+  for (let i = 0; i < payload.length; i += CHUNK) {
+    chunks.push(payload.slice(i, i + CHUNK));
+  }
   // ① 找已有页面
   const q = await api("/data_sources/" + dsId + "/query", "POST", { page_size: 100 }, token);
   let pageId = null;
@@ -165,27 +171,33 @@ async function saveBaselineToNotion(baseline, api, dsId, token) {
     }
     if (title === BASELINE_PAGE_TITLE) { pageId = p.id; break; }
   }
-  // ② 写正文
-  const blocks = [{
+  // ② 写正文（★ 每块一段 code ★）
+  const blocks = chunks.map((c) => ({
     object: "block",
     type: "code",
-    code: { rich_text: [{ type: "text", text: { content: payload } }], language: "json" },
-  }];
+    code: { rich_text: [{ type: "text", text: { content: c } }], language: "json" },
+  }));
   if (pageId) {
     // 清掉旧块
     const kids = await api("/blocks/" + pageId + "/children?page_size=100", "GET", null, token);
     for (const b of (kids.results || [])) {
       await api("/blocks/" + b.id, "PATCH", { archived: true }, token);
     }
-    await api("/blocks/" + pageId + "/children", "PATCH", { children: blocks }, token);
+    for (let i = 0; i < blocks.length; i += 80) {
+      await api("/blocks/" + pageId + "/children", "PATCH", { children: blocks.slice(i, i + 80) }, token);
+    }
   } else {
     await api("/pages", "POST", {
       parent: { type: "data_source_id", data_source_id: dsId },
       properties: {
         "标题": { title: [{ type: "text", text: { content: BASELINE_PAGE_TITLE } }] },
       },
-      children: blocks,
+      children: blocks.slice(0, 80),
     }, token);
+    // ★ 超过 80 块要分批追加 ★
+    for (let i = 80; i < blocks.length; i += 80) {
+      await api("/blocks/" + pageId + "/children", "PATCH", { children: blocks.slice(i, i + 80) }, token);
+    }
   }
   return true;
 }
@@ -203,12 +215,16 @@ async function loadBaselineFromNotion(api, dsId, token) {
         if (pr[k].type === "title") title = (pr[k].title || []).map((x) => x.plain_text).join("");
       }
       if (title !== BASELINE_PAGE_TITLE) continue;
-      const kids = await api("/blocks/" + p.id + "/children?page_size=10", "GET", null, token);
+      const kids = await api("/blocks/" + p.id + "/children?page_size=100", "GET", null, token);
+      // ★ 基线可能分成多个 code 块（★ Notion rich_text 单段上限 2000 ★）→ 拼接 ★
+      const parts = [];
       for (const b of (kids.results || [])) {
         if (b.type !== "code") continue;
-        const txt = ((b.code.rich_text || []).map((x) => x.plain_text || (x.text && x.text.content) || "")).join("");
-        try { return JSON.parse(txt); } catch (e) { /* 继续找 */ }
+        parts.push(((b.code.rich_text || []).map((x) => x.plain_text || (x.text && x.text.content) || "")).join(""));
       }
+      if (!parts.length) continue;
+      const txt = parts.join("");
+      try { return JSON.parse(txt); } catch (e) { /* 继续找 */ }
     }
   } catch (e) {
     // ★ 读不到就用文件版的 ★
