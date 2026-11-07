@@ -163,7 +163,10 @@ class FlomoMCP {
       const lastEnd = new Date(min - 24 * 3600 * 1000);
       if (lastEnd.getTime() <= start.getTime()) break;
       end = lastEnd;
-      if (list.length < limit) break;
+      // ★★ 注意：不能因为「本窗口没满 limit」就停 ★★
+      //   ★ 用户早期 memo 可能不在最近 30 天 → 早停会导致【漏拉】★
+      //   ★ 漏拉的会被误判成"已删除"→ 但后面的 probeAlive 会兜住（不会误归档）★
+      //   ★ 仍然要往前扫完，保证候选集尽量小 ★
     }
 
     // ② memo_batch_get：把被截断的正文补全（★ 每次 10 条 ★）
@@ -200,6 +203,47 @@ class FlomoMCP {
       }
     }
     return all;
+  }
+
+  /**
+   * ★★★ 存活探测：判断一批 slug 里哪些【还在 flomo 里】★★★ ★
+   *
+   *  ★ 为什么要这个：MCP 搜不到【已删除】的 memo（memo_search 不返回）
+   *    → 内部接口能看 deleted_at，MCP 看不到 → 删了不会自动归档 ★
+   *
+   *  ★★ 服务端的真实行为（★ 实测，别猜）★★
+   *    · 存在       → {"memos":[{...}]}
+   *    · 已删除     → {"memos":[],"omitted_ids":[],...}   ← ★★ 不报错！返回空数组 ★★
+   *    · 格式非法   → 抛错 "invalid slug ..."              （说明 slug 写错了，不是删除）
+   *    · 网络/限流  → 抛错（其它消息）                      ← ★ 不能当成删除 ★
+   *
+   *  ★ 判定规则（★ 只有"明确返回空"才算删除，异常一律算未知 ★）
+   *    返回 memos 有内容        → alive
+   *    返回 memos 空数组        → deleted  ← ★ 铁证 ★
+   *    抛错                     → unknown  ← 不处理，等下次
+   *
+   * @param {String[]} slugs 候选 slug
+   * @returns {Object} { deleted:[], alive:[], unknown:[] }
+   */
+  async probeAlive(slugs) {
+    const res = { deleted: [], alive: [], unknown: [] };
+    const list = (slugs || []).filter(Boolean);
+    for (const id of list) {
+      try {
+        const one = await this.call("memo_batch_get", { id });
+        const f = extractMemos(one);
+        if (f.length) {
+          res.alive.push(id);
+        } else {
+          // ★★★ 明确返回空 → 这条在 flomo 里已经不存在了（被删）★★★
+          res.deleted.push(id);
+        }
+      } catch (e) {
+        // ★ 抛错 → 不确定（网络/限流/格式问题）→ 绝不误判成删除 ★
+        res.unknown.push(id);
+      }
+    }
+    return res;
   }
 }
 
