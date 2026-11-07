@@ -223,8 +223,14 @@ async function main() {
       MCP = require(path.join(__dirname, "flomoMCP.js"));
       const cli = new MCP.FlomoMCP(cfg.mcpToken);
       await cli.init();
-      memos = (await cli.readMemos({ limit: 50 })).map((m) => W.adaptMemo(m));
-      source = "flomo 官方 MCP（个人 Token）";
+      // ★★★ 2026-11-07：★ 有游标就只拉游标之后（★ 快几十倍 ★）★★★
+      //   ★ 云端每天跑 2 次 → 每次扫全历史要 7 分钟 ★
+      //   ★ 游标时间在 cursor.latest_updated_at（★ 空 = 首次 → 全量 ★）
+      const since = (!FULL && cursor.latest_updated_at && cursor.latest_updated_at !== "0")
+        ? String(cursor.latest_updated_at).replace(/-/g, "/")   // ★ 2026-11-07 13:00:00 → 2026/11/07 13:00:00 ★
+        : "";
+      memos = (await cli.readMemos({ limit: 50, since })).map((m) => W.adaptMemo(m));
+      source = "flomo 官方 MCP（个人 Token）" + (since ? "（增量）" : "（全量）");
       mcpCli = cli;
     } catch (e) {
       console.log("  ⚠ MCP 取数失败：" + String(e.message).slice(0, 140));
