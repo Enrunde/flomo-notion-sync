@@ -23,9 +23,12 @@
 const fs = require("fs");
 const path = require("path");
 
-// ★★★ 2026-11-07：★ 基线放仓库内（★ 云端每次跑完提交回去 → 下次能对比 ★）★★★
-const BASELINE_FILE = path.join(__dirname, "flomo-baseline.json");
-process.env.FLOMO_BASELINE_FILE = BASELINE_FILE;
+// ★★★ 2026-11-07：★ 基线放 Notion（★ 不依赖 git 提交 ★）★★★ ★
+//   ★ 原因：★ GitHub 提交 .github/ 下的文件会被拒（404）★
+//     而且这台机器的 git 端点时好时坏（CONNECT tunnel 502）★
+//   ★ → 基线存 Notion 的一个特殊页面 → 下次从 Notion 读回 → 跨机器一致 ★
+process.env.FLOMO_BASELINE_IN_NOTION = "1";
+process.env.FLOMO_BASELINE_FILE = path.join(__dirname, "flomo-baseline.json");
 
 // ★★★ 唯一代码源：本地主脚本 ★★★
 const MAIN = path.join(__dirname, "同步flomo到Notion.js");
@@ -63,10 +66,7 @@ async function main() {
     return;
   }
   console.log("  取数凭证：" + (hasMcp ? "FLOMO_MCP_TOKEN ✔" : "") + (hasMcp && hasKey ? " + " : "") + (hasKey ? "FLOMO_API_KEY ✔" : ""));
-  console.log("  基线文件：" + BASELINE_FILE + (fs.existsSync(BASELINE_FILE) ? "" : "（首次会新建）"));
-
-  // ★ 基线已存在 → 主脚本会读它做三方合并 ★
-  ensureBaseline();
+  console.log("  基线存放：Notion 特殊页面（★ 不依赖 git ★）");
 
   // ── ② 调主脚本（★ 逻辑只有一份 ★）──
   if (!fs.existsSync(MAIN)) {
@@ -78,19 +78,9 @@ async function main() {
   const { main: syncMain } = require(MAIN);
   await syncMain();
 
-  // ── ③ 基线回写（★ 顺便把基线一起提交 ★）──
+  // ── ③ 基线（★ 已由主脚本写进 Notion ★）──
   console.log("");
-  console.log("── 基线 ──");
-  if (fs.existsSync(BASELINE_FILE)) {
-    try {
-      const j = JSON.parse(fs.readFileSync(BASELINE_FILE, "utf8"));
-      console.log("  ✔ 基线 " + Object.keys(j).length + " 条 → " + path.basename(BASELINE_FILE));
-    } catch (e) {
-      console.log("  ⚠ 基线读不了：" + String(e.message).slice(0, 60));
-    }
-  } else {
-    console.log("  ⚠ 没找到基线文件（三方合并下次会退化成单向覆盖）");
-  }
+  console.log("  ✔ 基线已由主脚本写进 Notion（下次会自动读回）");
 }
 
 main().catch((e) => {
