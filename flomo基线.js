@@ -134,7 +134,90 @@ function eq(a, b) {
   return String(a) === String(b);
 }
 
+// ══════════════════════════════════════════════════
+//  ★ 基线存到 Notion（★ 云端用这个代替 git 提交 ★）
+// ══════════════════════════════════════════════════
+//  ★ 为什么不用 git 提交基线：
+//   · GitHub Contents API 提交 .github/ 下的文件会被拒（404）
+//   · 而且这台机器的 git 端点时好时坏（CONNECT tunnel 502）
+//  ★ → 改成把基线存在 Notion 的一个特殊页面里 → 下次从 Notion 读回来 ★
+//  ★ 好处：不依赖 git、跨机器天然一致 ★
+
+const BASELINE_PAGE_TITLE = "🔒 flomo同步基线（勿删）";
+
+/**
+ * ★ 基线存进 Notion（★ 建成/更新一个特殊页面 ★）
+ * @param {Object} baseline  基线对象
+ * @param {Object} api        { api(path, method, body, token) }
+ * @param {String} dsId       笔记库的数据源 id
+ * @param {String} token
+ */
+async function saveBaselineToNotion(baseline, api, dsId, token) {
+  const payload = JSON.stringify(baseline);
+  // ① 找已有页面
+  const q = await api("/data_sources/" + dsId + "/query", "POST", { page_size: 100 }, token);
+  let pageId = null;
+  for (const p of (q.results || [])) {
+    const pr = p.properties || {};
+    let title = "";
+    for (const k of Object.keys(pr)) {
+      if (pr[k].type === "title") title = (pr[k].title || []).map((x) => x.plain_text).join("");
+    }
+    if (title === BASELINE_PAGE_TITLE) { pageId = p.id; break; }
+  }
+  // ② 写正文
+  const blocks = [{
+    object: "block",
+    type: "code",
+    code: { rich_text: [{ type: "text", text: { content: payload } }], language: "json" },
+  }];
+  if (pageId) {
+    // 清掉旧块
+    const kids = await api("/blocks/" + pageId + "/children?page_size=100", "GET", null, token);
+    for (const b of (kids.results || [])) {
+      await api("/blocks/" + b.id, "PATCH", { archived: true }, token);
+    }
+    await api("/blocks/" + pageId + "/children", "PATCH", { children: blocks }, token);
+  } else {
+    await api("/pages", "POST", {
+      parent: { type: "data_source_id", data_source_id: dsId },
+      properties: {
+        "标题": { title: [{ type: "text", text: { content: BASELINE_PAGE_TITLE } }] },
+      },
+      children: blocks,
+    }, token);
+  }
+  return true;
+}
+
+/**
+ * ★ 从 Notion 读回基线 ★
+ */
+async function loadBaselineFromNotion(api, dsId, token) {
+  try {
+    const q = await api("/data_sources/" + dsId + "/query", "POST", { page_size: 100 }, token);
+    for (const p of (q.results || [])) {
+      const pr = p.properties || {};
+      let title = "";
+      for (const k of Object.keys(pr)) {
+        if (pr[k].type === "title") title = (pr[k].title || []).map((x) => x.plain_text).join("");
+      }
+      if (title !== BASELINE_PAGE_TITLE) continue;
+      const kids = await api("/blocks/" + p.id + "/children?page_size=10", "GET", null, token);
+      for (const b of (kids.results || [])) {
+        if (b.type !== "code") continue;
+        const txt = ((b.code.rich_text || []).map((x) => x.plain_text || (x.text && x.text.content) || "")).join("");
+        try { return JSON.parse(txt); } catch (e) { /* 继续找 */ }
+      }
+    }
+  } catch (e) {
+    // ★ 读不到就用文件版的 ★
+  }
+  return null;
+}
+
 module.exports = {
   BASELINE_FILE, STATE_DIR,
   readBaseline, saveBaseline, getEntry, setEntry, merge3, eq,
+  saveBaselineToNotion, loadBaselineFromNotion, BASELINE_PAGE_TITLE,
 };
